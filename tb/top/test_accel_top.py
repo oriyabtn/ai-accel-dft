@@ -1,5 +1,5 @@
-# test_accel_top.py - the controller now runs everything.
-# The testbench only plays the role of the two memories.
+# test_accel_top.py - the whole accelerator, with real memories.
+# The testbench is now only the host: write A and B, start, wait, read C.
 import cocotb
 import numpy as np
 from cocotb.clock import Clock
@@ -33,60 +33,58 @@ def read_c(dut):
 
 async def reset(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
-    dut.rst_n.value = 0
-    dut.start.value = 0
-    dut.k_dim.value = 0
-    dut.a_col.value = 0
-    dut.b_row.value = 0
+    for sig in (dut.rst_n, dut.start, dut.k_dim,
+                dut.a_we, dut.a_waddr, dut.a_wdata,
+                dut.b_we, dut.b_waddr, dut.b_wdata):
+        sig.value = 0
     await RisingEdge(dut.clk)
     await RisingEdge(dut.clk)
     dut.rst_n.value = 1
 
 
-async def run(dut, A, B, garbage_after=0):
-    """Start the accelerator and act as memory until done.
-    Returns the result and the number of cycles it took."""
-    N = int(dut.N.value)
+async def load(dut, A, B):
+    """Write the columns of A and the rows of B into the two memories."""
     K = A.shape[1]
-    rng = np.random.default_rng()
+    for t in range(K):
+        await FallingEdge(dut.clk)
+        dut.a_we.value = 1
+        dut.a_waddr.value = t
+        dut.a_wdata.value = pack(A[:, t], AW)
+        dut.b_we.value = 1
+        dut.b_waddr.value = t
+        dut.b_wdata.value = pack(B[t, :], AW)
+    await FallingEdge(dut.clk)
+    dut.a_we.value = 0
+    dut.b_we.value = 0
 
-    # one-cycle start pulse
+
+async def compute(dut, K, junk_after=0):
+    """Pulse start, count cycles until done, return (C, cycles)."""
+    N = int(dut.N.value)
     await FallingEdge(dut.clk)
     dut.k_dim.value = K
     dut.start.value = 1
     await FallingEdge(dut.clk)
     dut.start.value = 0
-
-    cycles = 0
+    cycles = 1
     while True:
-        # act as memory: look at what the controller asks for
-        if int(dut.rd_valid.value):
-            addr = int(dut.rd_addr.value)
-            dut.a_col.value = pack(A[:, addr], AW)
-            dut.b_row.value = pack(B[addr, :], AW)
-        else:
-            dut.a_col.value = 0
-            dut.b_row.value = 0
-        cycles += 1
         await RisingEdge(dut.clk)
         await ReadOnly()
         if int(dut.done.value):
             break
-        await FallingEdge(dut.clk)
-
+        cycles += 1
     C = read_c(dut)
 
-    # after done: put random junk on the memory lines.
-    # en must be 0, so the result must not change.
-    for _ in range(garbage_after):
+    # junk on the write lines (we=0) must not change the result
+    rng = np.random.default_rng()
+    for _ in range(junk_after):
         await FallingEdge(dut.clk)
-        dut.a_col.value = pack(rng.integers(-128, 128, N), AW)
-        dut.b_row.value = pack(rng.integers(-128, 128, N), AW)
-    if garbage_after:
+        dut.a_wdata.value = pack(rng.integers(-128, 128, N), AW)
+        dut.b_wdata.value = pack(rng.integers(-128, 128, N), AW)
+    if junk_after:
         await RisingEdge(dut.clk)
         await ReadOnly()
         assert (read_c(dut) == C).all(), "result changed after done"
-
     return C, cycles
 
 
@@ -95,25 +93,24 @@ async def test_identity(dut):
     N = int(dut.N.value)
     await reset(dut)
     A = np.arange(1, N * N + 1).reshape(N, N)
-    C, _ = await run(dut, A, np.eye(N, dtype=int))
+    await load(dut, A, np.eye(N, dtype=int))
+    C, _ = await compute(dut, N)
     assert (C == A).all(), f"got\n{C}\nexpected\n{A}"
 
 
 @cocotb.test()
 async def test_cycle_count(dut):
-    """done must rise after exactly K + 2(N-1) cycles."""
+    """One extra cycle now, for the memory: K + 2(N-1) + 1."""
     N = int(dut.N.value)
     await reset(dut)
     for K in (1, N, 3 * N):
-        A = np.ones((N, K), dtype=int)
-        B = np.ones((K, N), dtype=int)
-        _, cycles = await run(dut, A, B)
-        assert cycles == K + 2 * (N - 1), f"K={K}: took {cycles} cycles"
+        await load(dut, np.ones((N, K), dtype=int), np.ones((K, N), dtype=int))
+        _, cycles = await compute(dut, K)
+        assert cycles == K + 2 * (N - 1) + 1, f"K={K}: took {cycles} cycles"
 
 
 @cocotb.test()
-async def test_random_with_junk_after_done(dut):
-    """Random matrices; junk on the inputs between runs must not matter."""
+async def test_random_back_to_back(dut):
     N = int(dut.N.value)
     await reset(dut)
     rng = np.random.default_rng()
@@ -121,5 +118,6 @@ async def test_random_with_junk_after_done(dut):
         for _ in range(10):
             A = rng.integers(-128, 128, (N, K))
             B = rng.integers(-128, 128, (K, N))
-            C, _ = await run(dut, A, B, garbage_after=5)
+            await load(dut, A, B)
+            C, _ = await compute(dut, K, junk_after=3)
             assert (C == A @ B).all(), f"K={K}: got\n{C}\nexpected\n{A @ B}"
