@@ -95,7 +95,7 @@ Requirements: Icarus Verilog, Yosys, Python 3 with `cocotb` and `numpy`.
 cd tb/top
 make N=4          # or N=2, N=8
 
-cd synth
+cd ../../synth
 yosys -s core.ys
 ```
 
