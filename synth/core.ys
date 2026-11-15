@@ -1,0 +1,6 @@
+# core.ys - generic synthesis of the systolic core (array + skew buffers)
+# run from the synth folder:  yosys -s core.ys
+read_verilog -sv ../rtl/pe.sv ../rtl/systolic_array.sv ../rtl/skew_buffer.sv ../rtl/systolic_core.sv
+chparam -set N 4 systolic_core
+synth -top systolic_core -flatten
+stat
