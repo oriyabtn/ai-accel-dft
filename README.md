@@ -1,0 +1,108 @@
+# AI accelerator with full DFT
+
+A small matrix-multiply accelerator for neural-network inference, written in SystemVerilog, with the goal of taking it all the way through design-for-test (scan, ATPG, JTAG, memory BIST and logic BIST) and physical design.
+
+**Status:** stage 1 of 5 (design) is complete. DFT work starts next.
+
+## What it does
+
+The accelerator computes `C = A × B` for signed 8-bit matrices, the core operation of every neural-network layer. `A` is N×K, `B` is K×N, and `C` is N×N with 32-bit results. N is a parameter (tested at 2, 4 and 8); K can be anything from 1 up to the memory depth.
+
+```mermaid
+flowchart LR
+    host[Host] -->|write A by columns| memA[SRAM A]
+    host -->|write B by rows| memB[SRAM B]
+    host -->|start, K| ctrl[Controller]
+    ctrl -->|read address| memA
+    ctrl -->|read address| memB
+    memA --> skA[Skew buffer A]
+    memB --> skB[Skew buffer B]
+    skA --> arr[N×N systolic array]
+    skB --> arr
+    ctrl -->|en, clear| arr
+    arr -->|C| host
+    ctrl -->|done| host
+```
+
+## How it works
+
+**Systolic array.** An N×N grid of processing elements (PEs). Each PE multiplies two 8-bit numbers and adds the product to its own 32-bit accumulator. Values of `A` move one PE to the right every cycle and values of `B` move one PE down, so each number is read from memory once and reused by a whole row or column. The dataflow is *output-stationary*: PE(i,j) keeps `C[i][j]` until the run ends.
+
+**Skew buffers.** For the right pairs to meet, row i of `A` must enter i cycles after row 0 (and the same for the columns of `B`). The memories deliver a whole column at once, so a skew buffer delays lane i with a chain of i registers.
+
+**Controller.** A two-state FSM (IDLE, RUN) with a cycle counter. It reads one memory address per cycle for K cycles, then feeds zeros while the last values travel through the array.
+
+**Memories.** The SRAMs have a synchronous read: data appears one cycle after the address. `en`, `clear` and the read-valid flag therefore pass through one flip-flop each, so they reach the array in the same cycle as the data they belong to.
+
+A full run takes:
+
+```
+cycles = K + 2(N-1) + 1
+```
+
+## Results
+
+Generic synthesis with Yosys (no technology library yet), for the core: array plus skew buffers.
+
+| Array | Flip-flops | Logic cells (all) |
+|---|---|---|
+| 4×4 | 800 | ~12,000 |
+| 8×8 | 3,392 | ~48,000 |
+
+The flip-flop count matches a hand calculation: 48 per PE (8 + 8 + 32 bits), plus the skew registers, minus the `a_out` registers of the last column and the `b_out` registers of the last row. Those drive nothing, so synthesis removes them. For 8×8: 3072 + 448 − 128 = 3392.
+
+## Verification
+
+Each block has its own cocotb testbench, checked against NumPy.
+
+| Testbench | Block | What it checks |
+|---|---|---|
+| `tb/` | PE | corner values (−128 × −128 and others), 1000 random accumulations, pass-through timing |
+| `tb/array/` | 2×2 array | hand-wired version, random matrices back to back |
+| `tb/array_n/` | N×N array | identity matrix first (easy to debug), then random matrices with K = 1, N, 3N |
+| `tb/core/` | array + skew | the same, with the skew done in hardware |
+| `tb/top/` | full accelerator | identity, exact cycle count, random runs, and junk on the inputs after `done` must not change the result |
+
+The testbenches were also checked against planted bugs (an 8-bit product, an always-on enable, control not delayed for the SRAM) to make sure each one fails when it should.
+
+## Design notes
+
+- **`clear` is shared by all PEs**, but PEs start at different cycles. This works because a PE loads `acc = a × b` on `clear`, and the controller always ends a run with zeros, so the internal wires hold zeros when the next run starts. The condition is guaranteed by the controller, not left to the user.
+- **Control is aligned with data.** Any extra latency on the data path (here, one cycle of SRAM read) gets the same number of flip-flops on the control signals. A memory with a latency of L cycles needs a chain of L.
+- **`en` freezes the whole core** outside a run, so the result stays stable until the host reads it, and idle registers do not toggle.
+
+## Repository layout
+
+```
+rtl/
+  pe.sv               one multiply-accumulate unit
+  systolic_2x2.sv     hand-wired 2x2 array (first version)
+  systolic_array.sv   NxN array, built with generate
+  skew_buffer.sv      delays lane i by i cycles
+  systolic_core.sv    skew buffers + array
+  sram.sv             memory with synchronous read
+  controller.sv       FSM, cycle counter, control alignment
+  accel_top.sv        controller + memories + core
+tb/                   cocotb testbenches, one folder per block
+synth/core.ys         Yosys synthesis script
+```
+
+## Running it
+
+Requirements: Icarus Verilog, Yosys, Python 3 with `cocotb` and `numpy`.
+
+```
+cd tb/top
+make N=4          # or N=2, N=8
+
+cd synth
+yosys -s core.ys
+```
+
+## Roadmap
+
+1. **Design** (done): PE, array, skew, controller, memories, synthesis.
+2. **Structural DFT:** scan insertion, ATPG for stuck-at and transition faults, a small fault simulator, a JTAG TAP controller.
+3. **BIST:** March C- memory BIST for the SRAMs, LFSR/MISR logic BIST for the array.
+4. **FPGA demo:** run a small network, inject faults, show the BIST catching them.
+5. **Physical design:** OpenLane on SkyWater 130 nm, with the area and timing cost of DFT.
