@@ -20,7 +20,8 @@ FLOP_TYPES = {"$_DFFE_PN0P_", "$_DFF_PN0_"}   # the two kinds Yosys gives us her
 
 def main():
     src, dst, chains, top = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
-    design = json.load(open(src))
+    with open(src) as f:
+        design = json.load(f)
     mod = design["modules"][top]
     cells, ports, nets = mod["cells"], mod["ports"], mod["netnames"]
 
@@ -86,7 +87,8 @@ def main():
     ports["scan_out"] = {"direction": "output", "bits": scan_out}
     nets["scan_out"] = {"hide_name": 0, "bits": scan_out}
 
-    json.dump(design, open(dst, "w"))
+    with open(dst, "w") as f:
+        json.dump(design, f)
 
     # readable names for every flip-flop output, for the map file
     q_names = {}
@@ -99,7 +101,8 @@ def main():
     for k, name in order:
         q = cells[name]["connections"]["Q"][0]
         scan_map[k].append(sorted(q_names.get(q, [name])))
-    json.dump({"chains": scan_map}, open(dst.replace(".json", ".map.json"), "w"), indent=1)
+    with open(dst.replace(".json", ".map.json"), "w") as f:
+        json.dump({"chains": scan_map}, f, indent=1)
     lengths = [sum(1 for k, _ in order if k == i) for i in range(chains)]
     print(f"scan: {len(flops)} flip-flops in {chains} chains, lengths {lengths}")
 

@@ -37,7 +37,8 @@ def unpack(bus, count, width):
 
 
 def chains():
-    return json.load(open(MAP))["chains"]
+    with open(MAP) as f:
+        return json.load(f)["chains"]
 
 
 async def reset(dut):
