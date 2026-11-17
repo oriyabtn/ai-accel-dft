@@ -2,7 +2,7 @@
 
 A small matrix-multiply accelerator for neural-network inference, written in SystemVerilog, with the goal of taking it all the way through design-for-test (scan, ATPG, JTAG, memory BIST and logic BIST) and physical design.
 
-**Status:** stage 1 of 5 (design) is complete. DFT work starts next.
+**Status:** stage 1 of 5 (design) is complete. Stage 2 (structural DFT) is in progress: scan insertion is done.
 
 ## What it does
 
@@ -62,8 +62,27 @@ Each block has its own cocotb testbench, checked against NumPy.
 | `tb/array_n/` | N×N array | identity matrix first (easy to debug), then random matrices with K = 1, N, 3N |
 | `tb/core/` | array + skew | the same, with the skew done in hardware |
 | `tb/top/` | full accelerator | identity, exact cycle count, random runs, and junk on the inputs after `done` must not change the result |
+| `tb/scan/` | core after scan insertion (gate level) | still multiplies correctly with `scan_en = 0`; chain integrity (random bits in, same bits out); load, capture one cycle, unload |
 
 The testbenches were also checked against planted bugs (an 8-bit product, an always-on enable, control not delayed for the SRAM) to make sure each one fails when it should.
+
+## Scan
+
+`dft/` synthesizes the core to a flat gate-level netlist, then `insert_scan.py` adds scan to every flip-flop: a mux in front of D (normal data or the previous flop in the chain), and an OR on the enable so the chain can shift even when the core is frozen. The flip-flops are split into a chosen number of equal chains, and a map file records which signal sits at each chain position.
+
+| 4×4 core | Cells | Flip-flops |
+|---|---|---|
+| Before scan | 12,036 | 800 |
+| After scan (4 chains of 200) | 13,636 | 800 |
+
+The extra 1,600 cells (+13%) are one mux and one OR per flip-flop.
+
+```
+cd dft
+make N=4 CHAINS=4
+cd ../tb/scan
+make N=4 CHAINS=4
+```
 
 ## Design notes
 
@@ -85,6 +104,7 @@ rtl/
   accel_top.sv        controller + memories + core
 tb/                   cocotb testbenches, one folder per block
 synth/core.ys         Yosys synthesis script
+dft/                  scan insertion flow (synthesis, insert_scan.py, netlist)
 ```
 
 ## Running it
@@ -102,7 +122,7 @@ yosys -s core.ys
 ## Roadmap
 
 1. **Design** (done): PE, array, skew, controller, memories, synthesis.
-2. **Structural DFT:** scan insertion, ATPG for stuck-at and transition faults, a small fault simulator, a JTAG TAP controller.
+2. **Structural DFT** (in progress): scan insertion (done), ATPG for stuck-at and transition faults, a small fault simulator, a JTAG TAP controller.
 3. **BIST:** March C- memory BIST for the SRAMs, LFSR/MISR logic BIST for the array.
 4. **FPGA demo:** run a small network, inject faults, show the BIST catching them.
 5. **Physical design:** OpenLane on SkyWater 130 nm, with the area and timing cost of DFT.
