@@ -1,5 +1,6 @@
-# dft/Makefile - synthesize the core, insert scan, write a Verilog netlist
-#   make N=4 CHAINS=4      ->  build/core_scan.v
+# dft/Makefile
+#   make N=4 CHAINS=4            synthesize the core, insert scan -> build/core_scan.v
+#   make faultsim PATTERNS=1024  stuck-at fault simulation of one PE
 N      ?= 4
 CHAINS ?= 4
 TOP     = systolic_core
@@ -18,7 +19,19 @@ $(BUILD)/core_scan.json: $(BUILD)/core.json insert_scan.py
 $(BUILD)/core_scan.v: $(BUILD)/core_scan.json
 	yosys -q -p "read_json $<; rename $(TOP) $(TOP)_scan; write_verilog -noattr $@"
 
+# fault simulation of one PE with random patterns:  make faultsim PATTERNS=1024
+PATTERNS ?= 1024
+SEED     ?= 1
+
+$(BUILD)/pe.json: ../rtl/pe.sv
+	mkdir -p $(BUILD)
+	yosys -q -l $(BUILD)/pe_synth.log -p "read_verilog -sv ../rtl/pe.sv; \
+	  synth -top pe -flatten; opt_clean -purge; write_json $@"
+
+faultsim: $(BUILD)/pe.json fault_sim.py
+	python3 fault_sim.py $< pe $(PATTERNS) $(SEED)
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean
+.PHONY: all clean faultsim
