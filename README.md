@@ -2,7 +2,7 @@
 
 A small matrix-multiply accelerator for neural-network inference, written in SystemVerilog, with the goal of taking it all the way through design-for-test (scan, ATPG, JTAG, memory BIST and logic BIST) and physical design.
 
-**Status:** stage 1 of 5 (design) is complete. Stage 2 (structural DFT) is in progress: scan insertion is done.
+**Status:** stage 1 of 5 (design) is complete. Stage 2 (structural DFT) is in progress: scan insertion, fault simulation and ATPG are done.
 
 ## What it does
 
@@ -84,6 +84,38 @@ cd ../tb/scan
 make N=4 CHAINS=4
 ```
 
+## Fault simulation and ATPG
+
+Run on one PE after synthesis (715 gates, 48 flip-flops). With full scan, every flip-flop is both a controllable input and an observable output, so the PE is tested as combinational logic. The fault list is every signal stuck at 0 and stuck at 1: 781 signals, 1,562 faults.
+
+- `fault_sim.py` injects each fault and simulates all random patterns at once (one bit of a Python integer per pattern).
+- `atpg.py` takes the faults that random patterns missed, and for each one asks a SAT solver for an input pattern on which the good and the faulty circuit differ. A pattern found is a test (and is checked by simulation); no pattern is a proof that the fault is untestable.
+
+| Random patterns | Coverage |
+|---|---|
+| 1 | 34.8% |
+| 8 | 83.1% |
+| 64 | 96.3% |
+| 1,024 | 99.4% |
+| 65,536 | 99.8% |
+
+Coverage climbs fast and then flattens: the last faults need very specific values (for example a carry through the whole adder). After 1,024 random patterns, ATPG finds tests for 9 of the 10 remaining faults and proves the last one untestable:
+
+| | |
+|---|---|
+| Fault coverage | 1561 / 1562 = 99.94% |
+| Test coverage (untestable faults excluded) | 1561 / 1561 = 100% |
+
+Two of the faults found by ATPG were still undetected after 65,536 random patterns.
+
+```
+cd dft
+make faultsim PATTERNS=1024
+make atpg PATTERNS=1024        # needs: pip install python-sat
+```
+
+Simplifications: faults are on signals only (no separate faults on fanout branches), clock and reset are not in the fault list, and the numbers above come from Yosys 0.33; a different Yosys version builds a slightly different netlist.
+
 ## Design notes
 
 - **`clear` is shared by all PEs**, but PEs start at different cycles. This works because a PE loads `acc = a × b` on `clear`, and the controller always ends a run with zeros, so the internal wires hold zeros when the next run starts. The condition is guaranteed by the controller, not left to the user.
@@ -109,7 +141,7 @@ dft/                  scan insertion flow (synthesis, insert_scan.py, netlist)
 
 ## Running it
 
-Requirements: Icarus Verilog, Yosys, Python 3 with `cocotb` and `numpy`.
+Requirements: Icarus Verilog, Yosys, Python 3 with `cocotb`, `numpy` and (for ATPG) `python-sat`.
 
 ```
 cd tb/top
@@ -122,7 +154,7 @@ yosys -s core.ys
 ## Roadmap
 
 1. **Design** (done): PE, array, skew, controller, memories, synthesis.
-2. **Structural DFT** (in progress): scan insertion (done), ATPG for stuck-at and transition faults, a small fault simulator, a JTAG TAP controller.
+2. **Structural DFT** (in progress): scan insertion, fault simulation and ATPG for stuck-at faults (done); next: ATPG for stuck-at and transition faults, a small fault simulator, a JTAG TAP controller.
 3. **BIST:** March C- memory BIST for the SRAMs, LFSR/MISR logic BIST for the array.
 4. **FPGA demo:** run a small network, inject faults, show the BIST catching them.
 5. **Physical design:** OpenLane on SkyWater 130 nm, with the area and timing cost of DFT.
