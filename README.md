@@ -154,7 +154,7 @@ yosys -s core.ys
 ## Roadmap
 
 1. **Design** (done): PE, array, skew, controller, memories, synthesis.
-2. **Structural DFT** (in progress): scan insertion, fault simulation and ATPG for stuck-at faults (done); next: ATPG for stuck-at and transition faults, a small fault simulator, a JTAG TAP controller.
+2. **Structural DFT** (in progress): scan insertion, fault simulation and ATPG for stuck-at faults (done); next: transition faults and a JTAG TAP controller.
 3. **BIST:** March C- memory BIST for the SRAMs, LFSR/MISR logic BIST for the array.
 4. **FPGA demo:** run a small network, inject faults, show the BIST catching them.
 5. **Physical design:** OpenLane on SkyWater 130 nm, with the area and timing cost of DFT.
